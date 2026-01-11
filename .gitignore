@@ -1,0 +1,123 @@
+# Compiled class files
+*.class
+
+# Log files
+*.log
+
+# BlueJ files
+*.ctxt
+
+# Mobile Tools for Java (J2ME)
+.mtj.tmp/
+
+# Package Files
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# Virtual machine crash logs and memory dumps
+hs_err_pid*
+replay_pid*
+*.hprof
+
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# Gradle
+.gradle
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# Local configuration - DO NOT COMMIT
+local.properties
+
+# IntelliJ IDEA
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
+
+# Eclipse
+.classpath
+.project
+.settings/
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
+
+# NetBeans
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Mac
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+
+# Application-specific - User-generated data (PHI - DO NOT COMMIT!)
+transcriptions/
+recordings/
+audit_logs/
+
+# Credentials and secrets (CRITICAL - NEVER COMMIT!)
+*.json
+!pom.json
+credentials/
+.credentials/
+*.key
+*.pem
+*.p12
+*.jks
+*.keystore
+*.pfx
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+~$*
+
+# Distribution packages (optional - uncomment if you don't want to track these)
+# dist/
+# *.exe
+# *.dmg
+# *.pkg
+# *.msi
+
+# Project-specific notes (optional - uncomment if you don't want to track these)
+# CHAT_SESSION.md
+# PLAN.md
