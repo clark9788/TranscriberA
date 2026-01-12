@@ -1,5 +1,6 @@
 package com.transcriber.file;
 
+import android.util.Log;
 import com.transcriber.audit.AuditLogger;
 import com.transcriber.config.Config;
 
@@ -27,6 +28,7 @@ import java.util.regex.Pattern;
  */
 public class FileManager {
 
+    private static final String TAG = "FileManager";
     private static final Pattern SANITIZE_PATTERN = Pattern.compile("[^A-Za-z0-9_-]+");
     private static final SimpleDateFormat TIMESTAMP_FORMATTER = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault());
     private static final SecureRandom secureRandom = new SecureRandom();
@@ -77,7 +79,7 @@ public class FileManager {
              OutputStreamWriter writer = new OutputStreamWriter(fos, StandardCharsets.UTF_8)) {
             writer.write(content);
         }
-        AuditLogger.log("save_transcription", file.toPath(), "", "Saved transcription");
+        AuditLogger.log("save_transcription", file, "", "Saved transcription");
     }
 
     /**
@@ -98,10 +100,11 @@ public class FileManager {
 
     /**
      * Securely delete a file by overwriting it multiple times with random data.
+     * @return true if successful, false otherwise.
      */
-    public static void secureDelete(File file, String patient) {
+    public static boolean secureDelete(File file, String patient) {
         if (file == null || !file.exists()) {
-            return;
+            return true; // Consider it a success if the file doesn't exist
         }
 
         try {
@@ -122,15 +125,37 @@ public class FileManager {
                 }
             }
             if (file.delete()) {
-                AuditLogger.log("secure_delete", file.toPath(), patient != null ? patient : "",
+                AuditLogger.log("secure_delete", file, patient != null ? patient : "",
                         String.format("Overwritten %d passes and deleted", Config.SECURE_OVERWRITE_PASSES));
+                return true;
             } else {
                 throw new IOException("Failed to delete file after overwriting");
             }
         } catch (IOException e) {
-            System.err.println("Failed to securely delete file: " + e.getMessage());
-            AuditLogger.log("secure_delete_failed", file.toPath(), patient != null ? patient : "",
+            Log.e(TAG, "Failed to securely delete file: " + file.getAbsolutePath(), e);
+            AuditLogger.log("secure_delete_failed", file, patient != null ? patient : "",
                     "Error: " + e.getMessage());
+            return false;
         }
+    }
+
+    /**
+     * Deletes all .wav files from the recordings directory.
+     * @return The number of files successfully deleted.
+     */
+    public static int deleteAllRecordings() {
+        if (Config.RECORDINGS_DIR == null || !Config.RECORDINGS_DIR.exists()) {
+            return 0;
+        }
+        File[] files = Config.RECORDINGS_DIR.listFiles((dir, name) -> name.toLowerCase().endsWith(".wav"));
+        int deletedCount = 0;
+        if (files != null) {
+            for (File file : files) {
+                if (secureDelete(file, "(batch delete)")) {
+                    deletedCount++;
+                }
+            }
+        }
+        return deletedCount;
     }
 }

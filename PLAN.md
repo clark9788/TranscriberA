@@ -4,27 +4,32 @@ This file tracks the development plan and future work for the TranscriberA appli
 
 ---
 
-### Phase 1: Project Setup & Initial Build (✓ - Complete)
+### Phase 1: Project Setup & Core Functionality (✓ - Complete)
 
-- [✓] Correct project directory structure (`src` inside `app`).
-- [✓] Fix `settings.gradle` and create `app/build.gradle`.
-- [✓] Resolve all Gradle and dependency compatibility issues.
-- [✓] Add all missing resource files (`.xml`, icons, `proguard-rules.pro`).
-- [✓] Successfully build the debug APK.
-- [✓] Deploy and run the app on the emulator.
-
----
-
-### Phase 2: Core Feature Implementation & Security (On Hold)
-
-- [ ] **Export Audit Log:** Add a feature to allow the user to securely export the `audit_log.csv` file from the app's private internal storage. 
-    - *Details:* This will likely involve a new button, a `FileProvider` configuration in the manifest, and using the Android Share Sheet intent.
-    - *Status:* On hold per user request. We will revisit this when ready.
+- [✓] Port project to Android Studio.
+- [✓] Fix all Gradle build and dependency issues.
+- [✓] Implement audio recording in `.wav` format.
+- [✓] Implement transcription via Google Cloud.
+- [✓] Implement saving and loading of transcriptions.
+- [✓] Implement deletion of audio and transcription files.
+- [✓] Fix all runtime crashes (`NoSuchMethodError`, etc.).
 
 ---
 
-### Phase 3: Finalization & Testing (Future To-Dos)
+### Phase 2: Data & File Management (Current Focus)
 
-- [ ] Thoroughly test all application features (recording, transcription, saving, deleting) on both phone and tablet emulators.
-- [ ] Create a formal "release" version of the APK for final delivery to the user.
+- [ ] **Export Audit Log:** Add a feature to allow the user to securely export the `audit_log.csv` file from the app's private internal storage (e.g., using a Share Sheet).
+- [ ] **Template Management:** Design a mechanism for the user to add or manage their own templates without needing to rebuild the app.
+- [ ] **Auto-delete Recordings:** Automatically delete local audio recordings after a successful transcription to improve data hygiene.
 
+---
+
+### Phase 3: UI/UX Polish
+
+- [ ] **Tablet UI:** Discuss and adapt the user interface to make better use of the larger screen space on tablets.
+
+---
+
+### Phase 4: Deployment
+
+- [ ] **Deploy to Phone:** Prepare a "release" build of the app and guide through the process of installing it on a physical Android phone.

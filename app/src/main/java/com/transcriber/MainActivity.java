@@ -1,8 +1,10 @@
 package com.transcriber;
 
 import android.Manifest;
+import android.app.AlertDialog;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.text.TextUtils;
 import android.util.Log;
 import android.view.View;
 import android.widget.ArrayAdapter;
@@ -60,7 +62,7 @@ public class MainActivity extends AppCompatActivity {
         initializeViews();
         initializePaths();
         AuditLogger.initialize();
-        audioRecorder = new AudioRecorder();
+        audioRecorder = new AudioRecorder(this);
 
         // Request permissions
         if (!checkPermissions()) {
@@ -88,8 +90,23 @@ public class MainActivity extends AppCompatActivity {
 
     private void initializePaths() {
         Config.TRANSCRIPTIONS_DIR = new File(getFilesDir(), "transcriptions");
+        if (!Config.TRANSCRIPTIONS_DIR.exists()) {
+            if (!Config.TRANSCRIPTIONS_DIR.mkdirs()) {
+                Log.e(TAG, "Could not create transcriptions directory");
+            }
+        }
         Config.RECORDINGS_DIR = new File(getFilesDir(), "recordings");
+        if (!Config.RECORDINGS_DIR.exists()) {
+            if (!Config.RECORDINGS_DIR.mkdirs()) {
+                Log.e(TAG, "Could not create recordings directory");
+            }
+        }
         Config.AUDIT_LOG_DIR = new File(getFilesDir(), "audit_logs");
+        if (!Config.AUDIT_LOG_DIR.exists()) {
+            if (!Config.AUDIT_LOG_DIR.mkdirs()) {
+                Log.e(TAG, "Could not create audit_logs directory");
+            }
+        }
     }
 
     private boolean checkPermissions() {
@@ -154,7 +171,7 @@ public class MainActivity extends AppCompatActivity {
         cleanButton.setOnClickListener(v -> cleanTranscription());
         saveButton.setOnClickListener(v -> saveTranscription());
         deleteTranscriptionButton.setOnClickListener(v -> deleteTranscription());
-        deleteRecordingButton.setOnClickListener(v -> deleteRecording());
+        deleteRecordingButton.setOnClickListener(v -> deleteAllRecordings());
 
         fileSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
             @Override
@@ -219,9 +236,10 @@ public class MainActivity extends AppCompatActivity {
                     statusTextView.setText("Transcription complete.");
                 });
             } catch (IOException | RuntimeException e) {
+                Log.e(TAG, "Transcription failed", e);
                 runOnUiThread(() -> {
                     statusTextView.setText("Transcription failed.");
-                    Toast.makeText(MainActivity.this, "Transcription failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    Toast.makeText(MainActivity.this, "Transcription failed: " + e.toString(), Toast.LENGTH_LONG).show();
                 });
             }
         });
@@ -237,6 +255,12 @@ public class MainActivity extends AppCompatActivity {
     private void saveTranscription() {
         String patient = patientNameEditText.getText().toString();
         String dob = dobEditText.getText().toString();
+
+        if (TextUtils.isEmpty(patient) || TextUtils.isEmpty(dob)) {
+            Toast.makeText(this, "Patient Name and DOB cannot be empty.", Toast.LENGTH_LONG).show();
+            return;
+        }
+
         File file = FileManager.generateFilename(patient, dob);
         String content = transcriptionEditText.getText().toString();
         executor.execute(() -> {
@@ -247,7 +271,8 @@ public class MainActivity extends AppCompatActivity {
                     loadTranscriptionFiles();
                 });
             } catch (IOException e) {
-                runOnUiThread(() -> Toast.makeText(MainActivity.this, "Failed to save transcription: " + e.getMessage(), Toast.LENGTH_SHORT).show());
+                Log.e(TAG, "Failed to save transcription", e);
+                runOnUiThread(() -> Toast.makeText(MainActivity.this, "Save failed: " + e.toString(), Toast.LENGTH_LONG).show());
             }
         });
     }
@@ -261,24 +286,38 @@ public class MainActivity extends AppCompatActivity {
         File fileToDelete = transcriptionFiles.get(selectedPosition);
         String patient = patientNameEditText.getText().toString();
         executor.execute(() -> {
-            FileManager.secureDelete(fileToDelete, patient);
-            runOnUiThread(() -> {
-                Toast.makeText(MainActivity.this, "Transcription deleted.", Toast.LENGTH_SHORT).show();
-                loadTranscriptionFiles();
-                transcriptionEditText.setText("");
-            });
+            if (FileManager.secureDelete(fileToDelete, patient)) {
+                runOnUiThread(() -> {
+                    Toast.makeText(MainActivity.this, "Transcription deleted.", Toast.LENGTH_SHORT).show();
+                    loadTranscriptionFiles();
+                    transcriptionEditText.setText("");
+                });
+            } else {
+                runOnUiThread(() -> Toast.makeText(MainActivity.this, "Failed to delete transcription.", Toast.LENGTH_SHORT).show());
+            }
         });
     }
 
-    private void deleteRecording() {
-        if (currentRecordingFile != null) {
-            String patient = patientNameEditText.getText().toString();
-            executor.execute(() -> {
-                FileManager.secureDelete(currentRecordingFile, patient);
-                currentRecordingFile = null;
-                runOnUiThread(() -> Toast.makeText(MainActivity.this, "Recording deleted.", Toast.LENGTH_SHORT).show());
-            });
-        }
+    private void deleteAllRecordings() {
+        new AlertDialog.Builder(this)
+                .setTitle("Delete All Recordings")
+                .setMessage("Are you sure you want to permanently delete all .wav recording files?")
+                .setPositiveButton(android.R.string.yes, (dialog, which) -> {
+                    executor.execute(() -> {
+                        int deletedCount = FileManager.deleteAllRecordings();
+                        Log.d(TAG, "deleteAllRecordings completed. Count: " + deletedCount);
+                        runOnUiThread(() -> {
+                            if (deletedCount > 0) {
+                                Toast.makeText(MainActivity.this, deletedCount + " recordings deleted.", Toast.LENGTH_SHORT).show();
+                            } else {
+                                Toast.makeText(MainActivity.this, "No recordings found to delete.", Toast.LENGTH_SHORT).show();
+                            }
+                        });
+                    });
+                })
+                .setNegativeButton(android.R.string.no, null)
+                .setIcon(android.R.drawable.ic_dialog_alert)
+                .show();
     }
 
     private void loadFile(File file) {

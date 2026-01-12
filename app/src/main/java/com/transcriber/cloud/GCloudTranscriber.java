@@ -1,6 +1,7 @@
 package com.transcriber.cloud;
 
 import android.content.Context;
+import android.util.Log;
 import com.google.api.gax.core.FixedCredentialsProvider;
 import com.google.api.gax.longrunning.OperationFuture;
 import com.google.auth.oauth2.GoogleCredentials;
@@ -25,6 +26,7 @@ import java.util.function.Consumer;
  */
 public class GCloudTranscriber {
 
+    private static final String TAG = "GCloudTranscriber";
     private static SpeechClient speechClient;
     private static Storage storageClient;
 
@@ -63,13 +65,13 @@ public class GCloudTranscriber {
             fis.read(fileData);
         }
 
-        Blob blob = bucket.create(audioFile.getName(), fileData, "audio/amr-wb");
+        Blob blob = bucket.create(audioFile.getName(), fileData, "audio/wav");
         AuditLogger.log("gcs_upload", audioFile.toPath(), patient != null ? patient : "", "Uploaded to GCS");
 
         String gcsUri = "gs://" + Config.GCS_BUCKET + "/" + audioFile.getName();
 
         RecognitionConfig config = RecognitionConfig.newBuilder()
-                .setEncoding(RecognitionConfig.AudioEncoding.AMR_WB)
+                .setEncoding(RecognitionConfig.AudioEncoding.LINEAR16)
                 .setSampleRateHertz(16000)
                 .setLanguageCode(Config.LANGUAGE_CODE)
                 .setModel(Config.GCS_MODEL)
@@ -84,15 +86,26 @@ public class GCloudTranscriber {
                 speechClient.longRunningRecognizeAsync(config, audio);
 
         try {
+            Log.d(TAG, "Waiting for transcription operation to complete...");
             LongRunningRecognizeResponse response = operation.get();
+            Log.d(TAG, "Transcription operation completed.");
+
+            if (response.getResultsList().isEmpty()) {
+                Log.w(TAG, "Transcription result was empty. No speech detected or error in recognition.");
+                return ""; // Return empty string if no results
+            }
+
             StringBuilder transcript = new StringBuilder();
             for (SpeechRecognitionResult result : response.getResultsList()) {
                 if (result.getAlternativesCount() > 0) {
                     transcript.append(result.getAlternatives(0).getTranscript());
                 }
             }
-            return transcript.toString();
+            String finalTranscript = transcript.toString();
+            Log.d(TAG, "Final Transcript: '" + finalTranscript + "'");
+            return finalTranscript;
         } catch (Exception e) {
+            Log.e(TAG, "Failed to get transcription result", e);
             throw new RuntimeException("Failed to get transcription result", e);
         } finally {
             blob.delete();
@@ -103,6 +116,7 @@ public class GCloudTranscriber {
 
     private static void setStatus(Consumer<String> callback, String message) {
         if (callback != null) {
+            Log.d(TAG, "Setting status: " + message);
             callback.accept(message);
         }
     }

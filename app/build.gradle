@@ -47,9 +47,14 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.9.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-    implementation platform('com.google.cloud:libraries-bom:26.29.0')
-    implementation 'com.google.cloud:google-cloud-speech'
-    implementation 'com.google.cloud:google-cloud-storage'
+    implementation 'io.grpc:grpc-okhttp:1.52.1'
+
+    // Explicitly exclude Guava from storage and add the correct Android version
+    implementation('com.google.cloud:google-cloud-storage:2.22.0') {
+        exclude group: 'com.google.guava', module: 'guava'
+    }
+    implementation 'com.google.cloud:google-cloud-speech:4.15.0'
+    implementation 'com.google.guava:guava:31.1-android'
 
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
