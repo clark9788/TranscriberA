@@ -2,7 +2,9 @@ package com.transcriber;
 
 import android.Manifest;
 import android.app.AlertDialog;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Bundle;
 import android.text.TextUtils;
 import android.util.Log;
@@ -18,7 +20,9 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 
+import com.google.android.material.button.MaterialButton;
 import com.transcriber.audio.AudioRecorder;
 import com.transcriber.audit.AuditLogger;
 import com.transcriber.cloud.GCloudTranscriber;
@@ -44,6 +48,7 @@ public class MainActivity extends AppCompatActivity {
     private EditText patientNameEditText, dobEditText, transcriptionEditText;
     private Spinner templateSpinner, fileSpinner;
     private Button recordButton, stopButton, sendToGoogleButton, cleanButton, saveButton, deleteTranscriptionButton, deleteRecordingButton;
+    private MaterialButton exportLogButton;
     private TextView statusTextView;
 
     private AudioRecorder audioRecorder;
@@ -85,6 +90,7 @@ public class MainActivity extends AppCompatActivity {
         saveButton = findViewById(R.id.saveButton);
         deleteTranscriptionButton = findViewById(R.id.deleteTranscriptionButton);
         deleteRecordingButton = findViewById(R.id.deleteRecordingButton);
+        exportLogButton = findViewById(R.id.exportLogButton);
         statusTextView = findViewById(R.id.statusTextView);
     }
 
@@ -172,6 +178,7 @@ public class MainActivity extends AppCompatActivity {
         saveButton.setOnClickListener(v -> saveTranscription());
         deleteTranscriptionButton.setOnClickListener(v -> deleteTranscription());
         deleteRecordingButton.setOnClickListener(v -> deleteAllRecordings());
+        exportLogButton.setOnClickListener(v -> exportAuditLog());
 
         fileSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
             @Override
@@ -221,6 +228,7 @@ public class MainActivity extends AppCompatActivity {
             try {
                 String patient = patientNameEditText.getText().toString();
                 String transcript = GCloudTranscriber.uploadAndTranscribe(currentRecordingFile, patient, this::updateStatus);
+                
                 runOnUiThread(() -> {
                     String templateName = (String) templateSpinner.getSelectedItem();
                     if (templateName != null) {
@@ -234,7 +242,16 @@ public class MainActivity extends AppCompatActivity {
                         transcriptionEditText.setText(transcript);
                     }
                     statusTextView.setText("Transcription complete.");
+                    
+                    // Auto-delete the recording file after successful transcription
+                    if (FileManager.secureDelete(currentRecordingFile, patient)) {
+                        Toast.makeText(MainActivity.this, "Original recording deleted.", Toast.LENGTH_SHORT).show();
+                    } else {
+                        Toast.makeText(MainActivity.this, "Failed to delete original recording.", Toast.LENGTH_SHORT).show();
+                    }
+                    currentRecordingFile = null;
                 });
+
             } catch (IOException | RuntimeException e) {
                 Log.e(TAG, "Transcription failed", e);
                 runOnUiThread(() -> {
@@ -318,6 +335,23 @@ public class MainActivity extends AppCompatActivity {
                 .setNegativeButton(android.R.string.no, null)
                 .setIcon(android.R.drawable.ic_dialog_alert)
                 .show();
+    }
+
+    private void exportAuditLog() {
+        File logFile = new File(Config.AUDIT_LOG_DIR, "audit_log.csv");
+        if (!logFile.exists()) {
+            Toast.makeText(this, "Audit log is empty.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        Uri logUri = FileProvider.getUriForFile(this, getApplicationContext().getPackageName() + ".provider", logFile);
+
+        Intent shareIntent = new Intent(Intent.ACTION_SEND);
+        shareIntent.setType("text/csv");
+        shareIntent.putExtra(Intent.EXTRA_STREAM, logUri);
+        shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+        startActivity(Intent.createChooser(shareIntent, "Export Audit Log"));
     }
 
     private void loadFile(File file) {
