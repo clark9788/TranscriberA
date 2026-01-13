@@ -30,7 +30,7 @@ This file tracks the development plan and future work for the TranscriberA appli
 
 - [✓] **Tablet UI:** Discuss and adapt the user interface to make better use of the larger screen space on tablets.
 
----
+--- *
 
 ### Phase 4: Deployment
 
