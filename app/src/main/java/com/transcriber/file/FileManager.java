@@ -3,6 +3,8 @@ package com.transcriber.file;
 import android.util.Log;
 import com.transcriber.audit.AuditLogger;
 import com.transcriber.config.Config;
+import com.transcriber.security.EncryptionManager;
+import com.transcriber.security.FileMetadataManager;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -140,22 +142,123 @@ public class FileManager {
     }
 
     /**
-     * Deletes all .wav files from the recordings directory.
+     * Deletes all audio files (both .wav and .enc) from the recordings directory.
      * @return The number of files successfully deleted.
      */
     public static int deleteAllRecordings() {
         if (Config.RECORDINGS_DIR == null || !Config.RECORDINGS_DIR.exists()) {
             return 0;
         }
-        File[] files = Config.RECORDINGS_DIR.listFiles((dir, name) -> name.toLowerCase().endsWith(".wav"));
+        File[] files = Config.RECORDINGS_DIR.listFiles((dir, name) -> {
+            String lowerName = name.toLowerCase();
+            return lowerName.endsWith(".wav") || lowerName.endsWith(".enc");
+        });
         int deletedCount = 0;
         if (files != null) {
             for (File file : files) {
-                if (secureDelete(file, "(batch delete)")) {
-                    deletedCount++;
+                // Encrypted files can just be deleted (no secure overwrite needed)
+                if (file.getName().endsWith(".enc")) {
+                    if (file.delete()) {
+                        AuditLogger.log("delete_recording", file, "(batch delete)", "Deleted encrypted recording");
+                        deletedCount++;
+                    }
+                } else {
+                    if (secureDelete(file, "(batch delete)")) {
+                        deletedCount++;
+                    }
                 }
             }
         }
         return deletedCount;
+    }
+
+    /**
+     * Save encrypted transcription with UUID filename.
+     */
+    public static File saveEncryptedTranscription(String uuid, String patientName, String dob, String content) throws Exception {
+        if (uuid == null || uuid.trim().isEmpty()) {
+            throw new IllegalArgumentException("UUID cannot be null or empty");
+        }
+
+        File encryptedFile = new File(Config.TRANSCRIPTIONS_DIR, uuid + ".enc");
+        File tempPlaintext = new File(Config.TRANSCRIPTIONS_DIR, ".temp_" + uuid + ".txt");
+
+        try {
+            try (FileOutputStream fos = new FileOutputStream(tempPlaintext);
+                 OutputStreamWriter writer = new OutputStreamWriter(fos, StandardCharsets.UTF_8)) {
+                writer.write(content);
+            }
+
+            EncryptionManager.encryptFile(tempPlaintext, encryptedFile);
+
+            long timestamp = System.currentTimeMillis();
+            FileMetadataManager.updateMetadata(uuid, patientName, dob, timestamp);
+
+            AuditLogger.log("save_encrypted_transcription", encryptedFile, patientName,
+                    "Saved encrypted transcription");
+
+            return encryptedFile;
+        } finally {
+            tempPlaintext.delete();
+        }
+    }
+
+    /**
+     * Load and decrypt transcription by UUID.
+     */
+    public static String loadEncryptedTranscription(String uuid) throws Exception {
+        if (uuid == null || uuid.trim().isEmpty()) {
+            throw new IllegalArgumentException("UUID cannot be null or empty");
+        }
+
+        File encryptedFile = new File(Config.TRANSCRIPTIONS_DIR, uuid + ".enc");
+        if (!encryptedFile.exists()) {
+            throw new IOException("Encrypted file not found: " + uuid);
+        }
+
+        return EncryptionManager.decryptFile(encryptedFile);
+    }
+
+    /**
+     * List all encrypted transcription files with metadata.
+     */
+    public static List<File> listEncryptedTranscriptions() {
+        if (Config.TRANSCRIPTIONS_DIR == null || !Config.TRANSCRIPTIONS_DIR.exists()) {
+            return new ArrayList<>();
+        }
+        File[] files = Config.TRANSCRIPTIONS_DIR.listFiles((dir, name) -> name.endsWith(".enc") && !name.equals(Config.METADATA_FILENAME));
+        if (files == null) {
+            return new ArrayList<>();
+        }
+        List<File> fileList = new ArrayList<>(Arrays.asList(files));
+        Collections.sort(fileList, Comparator.comparingLong(File::lastModified));
+        return fileList;
+    }
+
+    /**
+     * Delete encrypted transcription file and its metadata.
+     */
+    public static boolean deleteEncryptedTranscription(String uuid, String patient) {
+        if (uuid == null || uuid.trim().isEmpty()) {
+            return false;
+        }
+
+        File encryptedFile = new File(Config.TRANSCRIPTIONS_DIR, uuid + ".enc");
+        if (!encryptedFile.exists()) {
+            return true;
+        }
+
+        try {
+            if (encryptedFile.delete()) {
+                FileMetadataManager.deleteMetadata(uuid);
+                AuditLogger.log("delete_encrypted_transcription", encryptedFile, patient != null ? patient : "",
+                        "Deleted encrypted transcription and metadata");
+                return true;
+            }
+            return false;
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to delete encrypted transcription: " + uuid, e);
+            return false;
+        }
     }
 }

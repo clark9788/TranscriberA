@@ -17,7 +17,7 @@
         android:id="@+id/dobEditText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="Date of Birth (YYYYMMDD)" />
+        android:hint="Date of Birth (MMDDYYYY)" />
 
     <Spinner
         android:id="@+id/templateSpinner"

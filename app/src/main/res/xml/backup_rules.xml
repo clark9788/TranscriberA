@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
+    <!-- Explicitly exclude PHI directories (contains encrypted .enc files) -->
+    <exclude domain="file" path="transcriptions/"/>
+    <exclude domain="file" path="recordings/"/>
+    <exclude domain="file" path="audit_logs/"/>
+    <!-- Only backup shared preferences if needed -->
     <include domain="sharedpref" path="."/>
 </full-backup-content>

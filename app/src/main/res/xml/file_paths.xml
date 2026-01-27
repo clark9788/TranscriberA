@@ -3,4 +3,7 @@
     <files-path
         name="audit_logs"
         path="audit_logs/" />
+    <cache-path
+        name="export_cache"
+        path="." />
 </paths>

@@ -28,6 +28,11 @@ public class Config {
     // Security / deletion
     public static final int SECURE_OVERWRITE_PASSES = 3;
 
+    // Encryption
+    public static final String KEY_ALIAS = "transcriber_master_key";
+    public static final int BIOMETRIC_TIMEOUT_SECONDS = 36000; // 10 hours (doctor's workday)
+    public static final String METADATA_FILENAME = "file_metadata.json.enc";
+
     // Transcription cleaning - filler words to remove
     public static final List<String> FILLER_WORDS = Arrays.asList(
         "um",

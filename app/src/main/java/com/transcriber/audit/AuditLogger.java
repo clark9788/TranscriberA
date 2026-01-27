@@ -2,6 +2,7 @@ package com.transcriber.audit;
 
 import android.util.Log;
 import com.transcriber.config.Config;
+import com.transcriber.security.EncryptionManager;
 
 import java.io.File;
 import java.io.FileWriter;
@@ -11,6 +12,7 @@ import java.nio.file.Path;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.TimeZone;
 
 /**
  * HIPAA-aligned audit logging for Android.
@@ -21,33 +23,22 @@ public class AuditLogger {
     private static File LOG_FILE;
     private static final SimpleDateFormat ISO_FORMATTER = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.UK);
 
+    static {
+        ISO_FORMATTER.setTimeZone(TimeZone.getTimeZone("UTC"));
+    }
+
     /**
      * Initialize the logger. Must be called once before logging.
      */
     public static void initialize() {
         if (Config.AUDIT_LOG_DIR != null) {
             Config.AUDIT_LOG_DIR.mkdirs();
-            LOG_FILE = new File(Config.AUDIT_LOG_DIR, "audit_log.csv");
-            ensureHeader();
+            LOG_FILE = new File(Config.AUDIT_LOG_DIR, "audit_log.csv.enc");
         }
     }
 
     /**
-     * Ensures the CSV file has a header. This is now checked on each log call.
-     */
-    private static void ensureHeader() {
-        if (LOG_FILE == null || LOG_FILE.exists()) {
-            return;
-        }
-        try (PrintWriter writer = new PrintWriter(new FileWriter(LOG_FILE))) {
-            writer.println("timestamp,action,file,patient,details");
-        } catch (IOException e) {
-            Log.e(TAG, "Failed to write audit log header: ", e);
-        }
-    }
-
-    /**
-     * Append an audit row to the log file.
+     * Append an audit row to the encrypted log file.
      */
     public static void log(String action, File file, String patient, String details) {
         if (LOG_FILE == null) {
@@ -55,7 +46,7 @@ public class AuditLogger {
             return;
         }
 
-        try (PrintWriter writer = new PrintWriter(new FileWriter(LOG_FILE, true))) {
+        try {
             String timestamp = ISO_FORMATTER.format(new Date());
             String filePath = (file != null) ? file.getAbsolutePath() : "";
 
@@ -66,9 +57,27 @@ public class AuditLogger {
                 escapeCsv(patient != null ? patient : ""),
                 escapeCsv(details != null ? details : ""));
 
-            writer.println(csvRow);
-        } catch (IOException e) {
-            Log.e(TAG, "Failed to write to audit log: ", e);
+            String existingContent = "";
+            if (LOG_FILE.exists()) {
+                existingContent = EncryptionManager.decryptFile(LOG_FILE);
+            } else {
+                existingContent = "timestamp,action,file,patient,details\n";
+            }
+
+            String updatedContent = existingContent + csvRow + "\n";
+
+            File tempPlaintext = new File(Config.AUDIT_LOG_DIR, ".temp_audit.csv");
+            try {
+                try (PrintWriter writer = new PrintWriter(new FileWriter(tempPlaintext))) {
+                    writer.print(updatedContent);
+                }
+                EncryptionManager.encryptFile(tempPlaintext, LOG_FILE);
+            } finally {
+                tempPlaintext.delete();
+            }
+
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to write to encrypted audit log: ", e);
         }
     }
 
@@ -97,5 +106,65 @@ public class AuditLogger {
             return "\"" + value.replace("\"", "\"\"") + "\"";
         }
         return value;
+    }
+
+    /**
+     * Clean up audit log entries older than specified days.
+     */
+    public static void cleanupOldEntries(int retentionDays) {
+        if (LOG_FILE == null || !LOG_FILE.exists()) {
+            return;
+        }
+
+        try {
+            String content = EncryptionManager.decryptFile(LOG_FILE);
+            String[] lines = content.split("\n");
+
+            if (lines.length <= 1) {
+                return;
+            }
+
+            long cutoffTime = System.currentTimeMillis() - (retentionDays * 24L * 60 * 60 * 1000);
+            StringBuilder newContent = new StringBuilder();
+            newContent.append(lines[0]).append("\n");
+
+            int removedCount = 0;
+            for (int i = 1; i < lines.length; i++) {
+                String line = lines[i].trim();
+                if (line.isEmpty()) {
+                    continue;
+                }
+
+                String[] fields = line.split(",", 2);
+                if (fields.length > 0) {
+                    try {
+                        Date entryDate = ISO_FORMATTER.parse(fields[0].replace("\"", ""));
+                        if (entryDate != null && entryDate.getTime() >= cutoffTime) {
+                            newContent.append(line).append("\n");
+                        } else {
+                            removedCount++;
+                        }
+                    } catch (Exception e) {
+                        newContent.append(line).append("\n");
+                    }
+                }
+            }
+
+            if (removedCount > 0) {
+                File tempPlaintext = new File(Config.AUDIT_LOG_DIR, ".temp_audit_cleanup.csv");
+                try {
+                    try (PrintWriter writer = new PrintWriter(new FileWriter(tempPlaintext))) {
+                        writer.print(newContent.toString());
+                    }
+                    EncryptionManager.encryptFile(tempPlaintext, LOG_FILE);
+                    Log.i(TAG, "Cleaned up " + removedCount + " old audit log entries");
+                } finally {
+                    tempPlaintext.delete();
+                }
+            }
+
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to cleanup old audit log entries", e);
+        }
     }
 }

@@ -28,6 +28,9 @@ import com.transcriber.audit.AuditLogger;
 import com.transcriber.cloud.GCloudTranscriber;
 import com.transcriber.config.Config;
 import com.transcriber.file.FileManager;
+import com.transcriber.security.BiometricAuthHelper;
+import com.transcriber.security.EncryptionManager;
+import com.transcriber.security.FileMetadataManager;
 import com.transcriber.template.TemplateManager;
 import com.transcriber.text.TranscriptionCleaner;
 
@@ -39,6 +42,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -54,7 +58,10 @@ public class MainActivity extends AppCompatActivity {
     private AudioRecorder audioRecorder;
     private Map<String, String> templates;
     private List<File> transcriptionFiles;
+    private Map<String, FileMetadataManager.FileMetadata> transcriptionMetadata;
+    private List<String> transcriptionUUIDs;
     private File currentRecordingFile;
+    private String currentTranscriptionUUID;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
@@ -65,6 +72,7 @@ public class MainActivity extends AppCompatActivity {
 
         // Initialize components
         initializeViews();
+
         initializePaths();
         AuditLogger.initialize();
         audioRecorder = new AudioRecorder(this);
@@ -73,8 +81,49 @@ public class MainActivity extends AppCompatActivity {
         if (!checkPermissions()) {
             requestPermissions();
         } else {
-            initializeApp();
+            showBiometricPrompt();
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void showBiometricPrompt() {
+        BiometricAuthHelper authHelper = new BiometricAuthHelper(this);
+        authHelper.authenticate(
+                "Unlock TranscriberA",
+                "Authenticate to access encrypted patient data",
+                new BiometricAuthHelper.AuthCallback() {
+                    @Override
+                    public void onAuthSuccess() {
+                        try {
+                            EncryptionManager.getOrCreateKey();
+                            initializeApp();
+                        } catch (Exception e) {
+                            Log.e(TAG, "Failed to initialize encryption key", e);
+                            Toast.makeText(MainActivity.this, "Encryption setup failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                            finish();
+                        }
+                    }
+
+                    @Override
+                    public void onAuthFailure(String error) {
+                        Toast.makeText(MainActivity.this, "Authentication required to proceed", Toast.LENGTH_LONG).show();
+                        finish();
+                    }
+                }
+        );
     }
 
     private void initializeViews() {
@@ -116,13 +165,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private boolean checkPermissions() {
-        int internetPermission = ContextCompat.checkSelfPermission(this, Manifest.permission.INTERNET);
         int recordAudioPermission = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO);
-        return internetPermission == PackageManager.PERMISSION_GRANTED && recordAudioPermission == PackageManager.PERMISSION_GRANTED;
+        return recordAudioPermission == PackageManager.PERMISSION_GRANTED;
     }
 
     private void requestPermissions() {
-        ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.INTERNET, Manifest.permission.RECORD_AUDIO}, REQUEST_PERMISSIONS);
+        ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_PERMISSIONS);
     }
 
     @Override
@@ -160,14 +208,34 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void loadTranscriptionFiles() {
-        transcriptionFiles = FileManager.listTranscriptions();
-        List<String> fileNames = new ArrayList<>();
-        for (File file : transcriptionFiles) {
-            fileNames.add(file.getName());
+        try {
+            transcriptionFiles = FileManager.listEncryptedTranscriptions();
+            transcriptionMetadata = FileMetadataManager.getAllMetadata();
+            transcriptionUUIDs = new ArrayList<>();
+            List<String> displayNames = new ArrayList<>();
+
+            for (File file : transcriptionFiles) {
+                String filename = file.getName();
+                if (filename.endsWith(".enc")) {
+                    String uuid = filename.substring(0, filename.length() - 4);
+                    FileMetadataManager.FileMetadata metadata = transcriptionMetadata.get(uuid);
+                    if (metadata != null) {
+                        transcriptionUUIDs.add(uuid);
+                        displayNames.add(metadata.displayName);
+                    } else {
+                        transcriptionUUIDs.add(uuid);
+                        displayNames.add(uuid);
+                    }
+                }
+            }
+
+            ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, displayNames);
+            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            fileSpinner.setAdapter(adapter);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to load transcription files", e);
+            Toast.makeText(this, "Failed to load files: " + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, fileNames);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        fileSpinner.setAdapter(adapter);
     }
 
     private void setupListeners() {
@@ -208,7 +276,22 @@ public class MainActivity extends AppCompatActivity {
 
     private void stopRecording() {
         executor.execute(() -> {
-            audioRecorder.stop();
+            File recordingFile = audioRecorder.stop();
+
+            // Encrypt the audio file immediately after recording
+            if (recordingFile != null && recordingFile.exists()) {
+                try {
+                    File encryptedAudio = new File(recordingFile.getAbsolutePath() + ".enc");
+                    EncryptionManager.encryptBinaryFile(recordingFile, encryptedAudio);
+                    recordingFile.delete();
+                    currentRecordingFile = encryptedAudio;
+                    Log.i(TAG, "Audio recording encrypted: " + encryptedAudio.getName());
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to encrypt audio recording", e);
+                    currentRecordingFile = recordingFile;
+                }
+            }
+
             runOnUiThread(() -> {
                 statusTextView.setText("Recording stopped.");
                 recordButton.setEnabled(true);
@@ -225,34 +308,118 @@ public class MainActivity extends AppCompatActivity {
 
         statusTextView.setText("Transcribing...");
         executor.execute(() -> {
+            File tempWavFile = null;
             try {
                 String patient = patientNameEditText.getText().toString();
-                String transcript = GCloudTranscriber.uploadAndTranscribe(currentRecordingFile, patient, this::updateStatus);
-                
+                String dob = dobEditText.getText().toString();
+
+                File audioFileForUpload = currentRecordingFile;
+
+                // If audio is encrypted, decrypt to temporary file for GCS upload
+                if (currentRecordingFile.getName().endsWith(".enc")) {
+                    Log.i(TAG, "Encrypted audio file: " + currentRecordingFile.getAbsolutePath() + " (" + currentRecordingFile.length() + " bytes)");
+                    tempWavFile = new File(Config.RECORDINGS_DIR, ".temp_upload_" + System.currentTimeMillis() + ".wav");
+                    EncryptionManager.decryptBinaryFile(currentRecordingFile, tempWavFile);
+                    audioFileForUpload = tempWavFile;
+                    Log.i(TAG, "Decrypted audio for GCS upload: " + tempWavFile.getName());
+                    Log.i(TAG, "Decrypted audio size: " + tempWavFile.length() + " bytes");
+
+                    // Verify WAV header
+                    if (tempWavFile.length() < 44) {
+                        throw new IOException("Decrypted audio file too small (< 44 bytes) - may be corrupted");
+                    }
+                }
+
+                File finalTempWav = tempWavFile;
+
+                // Log audio file details before upload
+                Log.i(TAG, "Audio file for upload: " + audioFileForUpload.getAbsolutePath());
+                Log.i(TAG, "Audio file size: " + audioFileForUpload.length() + " bytes");
+                Log.i(TAG, "Audio file exists: " + audioFileForUpload.exists());
+
+                String transcript = GCloudTranscriber.uploadAndTranscribe(audioFileForUpload, patient, this::updateStatus);
+
+                // Log transcription result
+                Log.i(TAG, "Transcription result length: " + (transcript != null ? transcript.length() : 0));
+                Log.i(TAG, "Transcription content: " + (transcript != null ? transcript.substring(0, Math.min(100, transcript.length())) : "NULL"));
+
+                if (transcript == null || transcript.trim().isEmpty()) {
+                    Log.w(TAG, "Transcription is empty or null - possible audio quality issue");
+                    runOnUiThread(() -> {
+                        Toast.makeText(MainActivity.this, "Transcription returned empty. Check audio quality or microphone.", Toast.LENGTH_LONG).show();
+                        statusTextView.setText("Transcription empty - check audio");
+                    });
+                    // Clean up temp file
+                    if (finalTempWav != null && finalTempWav.exists()) {
+                        finalTempWav.delete();
+                    }
+                    return;
+                }
+
+                String finalTranscript = transcript;
                 runOnUiThread(() -> {
-                    String templateName = (String) templateSpinner.getSelectedItem();
-                    if (templateName != null) {
-                        String templateContent = templates.get(templateName);
-                        Map<String, String> context = new HashMap<>();
-                        context.put("PATIENT", patientNameEditText.getText().toString());
-                        context.put("DOB", dobEditText.getText().toString());
-                        String processedText = TemplateManager.applyTemplate(templateContent, transcript, context);
+                    try {
+                        String templateName = (String) templateSpinner.getSelectedItem();
+                        String processedText;
+                        if (templateName != null) {
+                            String templateContent = templates.get(templateName);
+                            Map<String, String> context = new HashMap<>();
+                            context.put("PATIENT", patient);
+                            context.put("DOB", dob);
+                            processedText = TemplateManager.applyTemplate(templateContent, finalTranscript, context);
+                        } else {
+                            processedText = finalTranscript;
+                        }
+
+                        Log.i(TAG, "Processed text length: " + processedText.length());
+
+                        // STAGE 1: Auto-save encrypted transcription immediately
+                        currentTranscriptionUUID = java.util.UUID.randomUUID().toString();
+                        FileManager.saveEncryptedTranscription(currentTranscriptionUUID, patient, dob, processedText);
+
+                        // TODO: GCS cleanup - delete audio + transcription from cloud
+                        // TranscriptionApiClient.cleanup(audioFilename);
+
+                        // Display for editing
                         transcriptionEditText.setText(processedText);
-                    } else {
-                        transcriptionEditText.setText(transcript);
+                        statusTextView.setText("Transcription saved (editable)");
+                        Toast.makeText(MainActivity.this, "Transcription auto-saved. Press Save to update.", Toast.LENGTH_SHORT).show();
+
+                        // Delete encrypted recording file
+                        if (currentRecordingFile.delete()) {
+                            Log.i(TAG, "Encrypted recording deleted: " + currentRecordingFile.getName());
+                        }
+
+                        // Delete temporary decrypted WAV if it exists
+                        if (finalTempWav != null && finalTempWav.exists()) {
+                            finalTempWav.delete();
+                            Log.i(TAG, "Temporary WAV deleted: " + finalTempWav.getName());
+                        }
+
+                        currentRecordingFile = null;
+
+                        loadTranscriptionFiles();
+
+                        // Select the newly created transcription in the spinner
+                        String newUuid = currentTranscriptionUUID;
+                        if (newUuid != null && transcriptionUUIDs != null) {
+                            int position = transcriptionUUIDs.indexOf(newUuid);
+                            if (position >= 0) {
+                                fileSpinner.setSelection(position);
+                            }
+                        }
+
+                    } catch (Exception e) {
+                        Log.e(TAG, "Failed to save transcription", e);
+                        Toast.makeText(MainActivity.this, "Auto-save failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
                     }
-                    statusTextView.setText("Transcription complete.");
-                    
-                    // Auto-delete the recording file after successful transcription
-                    if (FileManager.secureDelete(currentRecordingFile, patient)) {
-                        Toast.makeText(MainActivity.this, "Original recording deleted.", Toast.LENGTH_SHORT).show();
-                    } else {
-                        Toast.makeText(MainActivity.this, "Failed to delete original recording.", Toast.LENGTH_SHORT).show();
-                    }
-                    currentRecordingFile = null;
                 });
 
-            } catch (IOException | RuntimeException e) {
+            } catch (Exception e) {
+                // Clean up temp file on error
+                if (tempWavFile != null && tempWavFile.exists()) {
+                    tempWavFile.delete();
+                }
                 Log.e(TAG, "Transcription failed", e);
                 runOnUiThread(() -> {
                     statusTextView.setText("Transcription failed.");
@@ -278,36 +445,55 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        File file = FileManager.generateFilename(patient, dob);
         String content = transcriptionEditText.getText().toString();
         executor.execute(() -> {
             try {
-                FileManager.saveTranscription(file, content);
+                // STAGE 2: Update existing encrypted file (or create new if no auto-save happened)
+                if (currentTranscriptionUUID == null) {
+                    currentTranscriptionUUID = java.util.UUID.randomUUID().toString();
+                }
+
+                String savedUuid = currentTranscriptionUUID;
+                FileManager.saveEncryptedTranscription(currentTranscriptionUUID, patient, dob, content);
+
                 runOnUiThread(() -> {
-                    Toast.makeText(MainActivity.this, "Transcription saved.", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(MainActivity.this, "Transcription updated.", Toast.LENGTH_SHORT).show();
                     loadTranscriptionFiles();
+
+                    // Keep the current file selected after save
+                    if (savedUuid != null && transcriptionUUIDs != null) {
+                        int position = transcriptionUUIDs.indexOf(savedUuid);
+                        if (position >= 0) {
+                            fileSpinner.setSelection(position);
+                        }
+                    }
+
+                    currentTranscriptionUUID = savedUuid;
                 });
-            } catch (IOException e) {
+            } catch (Exception e) {
                 Log.e(TAG, "Failed to save transcription", e);
-                runOnUiThread(() -> Toast.makeText(MainActivity.this, "Save failed: " + e.toString(), Toast.LENGTH_LONG).show());
+                runOnUiThread(() -> Toast.makeText(MainActivity.this, "Save failed: " + e.getMessage(), Toast.LENGTH_LONG).show());
             }
         });
     }
 
     private void deleteTranscription() {
         int selectedPosition = fileSpinner.getSelectedItemPosition();
-        if (selectedPosition < 0 || selectedPosition >= transcriptionFiles.size()) {
+        if (selectedPosition < 0 || selectedPosition >= transcriptionUUIDs.size()) {
             Toast.makeText(this, "No file selected to delete.", Toast.LENGTH_SHORT).show();
             return;
         }
-        File fileToDelete = transcriptionFiles.get(selectedPosition);
+        String uuid = transcriptionUUIDs.get(selectedPosition);
         String patient = patientNameEditText.getText().toString();
         executor.execute(() -> {
-            if (FileManager.secureDelete(fileToDelete, patient)) {
+            if (FileManager.deleteEncryptedTranscription(uuid, patient)) {
                 runOnUiThread(() -> {
                     Toast.makeText(MainActivity.this, "Transcription deleted.", Toast.LENGTH_SHORT).show();
                     loadTranscriptionFiles();
                     transcriptionEditText.setText("");
+                    if (uuid.equals(currentTranscriptionUUID)) {
+                        currentTranscriptionUUID = null;
+                    }
                 });
             } else {
                 runOnUiThread(() -> Toast.makeText(MainActivity.this, "Failed to delete transcription.", Toast.LENGTH_SHORT).show());
@@ -338,28 +524,84 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void exportAuditLog() {
-        File logFile = new File(Config.AUDIT_LOG_DIR, "audit_log.csv");
-        if (!logFile.exists()) {
-            Toast.makeText(this, "Audit log is empty.", Toast.LENGTH_SHORT).show();
-            return;
-        }
+        executor.execute(() -> {
+            try {
+                Log.i(TAG, "Export audit log started");
+                File encryptedLog = new File(Config.AUDIT_LOG_DIR, "audit_log.csv.enc");
+                if (!encryptedLog.exists()) {
+                    Log.w(TAG, "Audit log file does not exist");
+                    runOnUiThread(() -> Toast.makeText(this, "Audit log is empty.", Toast.LENGTH_SHORT).show());
+                    return;
+                }
 
-        Uri logUri = FileProvider.getUriForFile(this, getApplicationContext().getPackageName() + ".provider", logFile);
+                Log.i(TAG, "Decrypting audit log: " + encryptedLog.getAbsolutePath());
+                File tempPlaintextLog = new File(getCacheDir(), "audit_log_export.csv");
+                EncryptionManager.decryptFile(encryptedLog, tempPlaintextLog);
+                Log.i(TAG, "Audit log decrypted to: " + tempPlaintextLog.getAbsolutePath() + " (" + tempPlaintextLog.length() + " bytes)");
 
-        Intent shareIntent = new Intent(Intent.ACTION_SEND);
-        shareIntent.setType("text/csv");
-        shareIntent.putExtra(Intent.EXTRA_STREAM, logUri);
-        shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                runOnUiThread(() -> {
+                    try {
+                        String authority = getApplicationContext().getPackageName() + ".provider";
+                        Log.i(TAG, "Creating FileProvider URI with authority: " + authority);
+                        Uri logUri = FileProvider.getUriForFile(this, authority, tempPlaintextLog);
+                        Log.i(TAG, "FileProvider URI created: " + logUri.toString());
 
-        startActivity(Intent.createChooser(shareIntent, "Export Audit Log"));
+                        Intent shareIntent = new Intent(Intent.ACTION_SEND);
+                        shareIntent.setType("text/csv");
+                        shareIntent.putExtra(Intent.EXTRA_STREAM, logUri);
+                        shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+                        Log.i(TAG, "Starting share chooser");
+                        startActivity(Intent.createChooser(shareIntent, "Export Audit Log"));
+
+                        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                            if (tempPlaintextLog.exists()) {
+                                tempPlaintextLog.delete();
+                                Log.i(TAG, "Temporary audit log export file deleted");
+                            }
+                        }, 300000); // 5 minutes
+                    } catch (Exception e) {
+                        Log.e(TAG, "Failed to create share intent", e);
+                        Toast.makeText(this, "Share failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    }
+                });
+
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to export audit log", e);
+                runOnUiThread(() -> Toast.makeText(this, "Export failed: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        });
     }
 
     private void loadFile(File file) {
         executor.execute(() -> {
             try {
-                String content = FileManager.loadTranscription(file);
-                runOnUiThread(() -> transcriptionEditText.setText(content));
-            } catch (IOException e) {
+                String filename = file.getName();
+                if (filename.endsWith(".enc")) {
+                    String uuid = filename.substring(0, filename.length() - 4);
+                    String content = FileManager.loadEncryptedTranscription(uuid);
+
+                    FileMetadataManager.FileMetadata metadata = transcriptionMetadata.get(uuid);
+                    if (metadata != null) {
+                        String patientName = metadata.patientName;
+                        String dob = metadata.dob;
+                        runOnUiThread(() -> {
+                            patientNameEditText.setText(patientName);
+                            dobEditText.setText(dob);
+                            transcriptionEditText.setText(content);
+                            currentTranscriptionUUID = uuid;
+                        });
+                    } else {
+                        runOnUiThread(() -> {
+                            transcriptionEditText.setText(content);
+                            currentTranscriptionUUID = uuid;
+                        });
+                    }
+                } else {
+                    String content = FileManager.loadTranscription(file);
+                    runOnUiThread(() -> transcriptionEditText.setText(content));
+                }
+            } catch (Exception e) {
                 runOnUiThread(() -> Toast.makeText(MainActivity.this, "Failed to load file: " + e.getMessage(), Toast.LENGTH_SHORT).show());
             }
         });
