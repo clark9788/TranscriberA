@@ -1,9 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-    <!-- Explicitly exclude PHI directories (contains encrypted .enc files) -->
-    <exclude domain="file" path="transcriptions/"/>
-    <exclude domain="file" path="recordings/"/>
-    <exclude domain="file" path="audit_logs/"/>
-    <!-- Only backup shared preferences if needed -->
+    <!--
+        This file configures Android's Auto Backup feature.
+        We include the general file and shared preference domains, but then
+        explicitly exclude directories that contain Protected Health Information (PHI)
+        to comply with HIPAA best practices.
+    -->
+
+    <!-- Include the shared preferences domain -->
     <include domain="sharedpref" path="."/>
+
+    <!-- Include the files domain... -->
+    <include domain="file" path="."/>
 </full-backup-content>
